@@ -57,7 +57,7 @@ class Dialog:
 
 class App:
     def __init__(self, url, *, binary, profile, log_path, scale=1.0, transfer="auto", stats=False,
-                 search=SEARCH, control=True, in_fd=0, out_fd=1):
+                 search=SEARCH, control=True, tunnel=None, in_fd=0, out_fd=1):
         self.first_url, self.binary, self.profile, self.log_path = url, binary, profile, log_path
         self.scale, self.stats, self.search, self.in_fd, self.out_fd = scale, stats, search, in_fd, out_fd
         if transfer == "auto":   # a file in shared memory only reaches a terminal on this machine
@@ -68,6 +68,7 @@ class App:
         self.proc = self.cdp = None
         self.control = None                    # the socket other programs drive us through
         self.use_control = control
+        self.tunnel = tunnel                   # --ssh: the proxy the browser's network goes through
         self.tabs, self.tab = [], None         # all of them, and the one on screen
         self.mode = None                       # None, a LineEdit (the address), or a Dialog
         self.size = None
@@ -124,7 +125,8 @@ class App:
             self.profile = self.temp_profile = tempfile.mkdtemp(prefix=f"browzer-profile-{os.getpid()}-")
         os.makedirs(self.profile, exist_ok=True)
         _, _, w, h = self.view()
-        self.proc, self.cdp = chromium.launch(self.binary, self.profile, self.css(w), self.css(h), self.log_path)
+        self.proc, self.cdp = chromium.launch(self.binary, self.profile, self.css(w), self.css(h), self.log_path,
+                                              self.tunnel.chromium_args() if self.tunnel else ())
         try:
             self.cdp.call("Target.setDiscoverTargets", {"discover": True})
             page = next(t for t in self.cdp.call("Target.getTargets")["targetInfos"] if t["type"] == "page")
@@ -223,6 +225,10 @@ class App:
                       then=lambda r: self.on_title(tab, r))
         elif name == "control":
             self.control.expire()
+        elif name == "tunnel":
+            if self.tunnel.revive():
+                self.notice = f"the ssh tunnel to {self.tunnel.label} closed; reconnecting (ctrl+r reloads the page)"
+            self.after("tunnel", 2)
         elif name == "pointer" and self.hover:
             x, y = self.hover
             self.send("Runtime.evaluate", {"expression": POINTER_AT % (x, y, x, y), "returnByValue": True},
@@ -252,6 +258,8 @@ class App:
         try:
             with term.Screen(self.in_fd, self.out_fd):
                 self.draw_bar()
+                if self.tunnel:
+                    self.after("tunnel", 2)
                 while not self.done:
                     self.handle(self.cdp.take())
                     now = time.monotonic()
@@ -437,6 +445,8 @@ class App:
             return b"\x1b[0;1m" + (fit(f" {d.kind}: {d.message}", cols - len(keys)) + keys)[:cols].encode() + b"\x1b[0m"
         tab = self.tab
         count = f" {self.tabs.index(tab) + 1}/{len(self.tabs)}" if len(self.tabs) > 1 else ""
+        if self.tunnel:
+            count = f" [{self.tunnel.label}]{count}"
         left = f"{count} {'◌' if tab.loading else ' '} {tab.title or tab.url}"
         if tab.title and tab.url:
             left += f"  ·  {tab.url}"

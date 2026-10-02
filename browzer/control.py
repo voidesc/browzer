@@ -233,7 +233,7 @@ class Control:
     # --- commands -----------------------------------------------------------------
 
     def cmd_ls(self, req, msg):
-        req.reply(pid=os.getpid(), tabs=self.tabs())
+        req.reply(pid=os.getpid(), tabs=self.tabs(), ssh=self.app.tunnel.label if self.app.tunnel else None)
 
     def cmd_open(self, req, msg):
         url = str(msg["url"])

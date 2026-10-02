@@ -13,6 +13,7 @@ import sys
 
 from . import __version__, chromium
 from .app import App, Unsupported
+from .tunnel import Tunnel, TunnelError
 from .url import SEARCH, normalize
 
 
@@ -26,6 +27,8 @@ def main(argv=None):
     ap.add_argument("--chromium", metavar="PATH", help="the browser to run (default: $BROWZER_CHROMIUM, else chromium on PATH)")
     ap.add_argument("--profile", metavar="DIR", help="the browser profile (default: browzer/profile under $XDG_DATA_HOME)")
     ap.add_argument("--temp-profile", action="store_true", help="a fresh profile, deleted on exit")
+    ap.add_argument("--ssh", metavar="HOST", help="the browser's network is HOST's: its localhost, its DNS (user@host, "
+                    "or quoted ssh options and a host). Needs key or agent login; uses a profile of its own per host")
     ap.add_argument("--scale", type=float, default=float(os.environ.get("BROWZER_SCALE", 1)), metavar="N",
                     help="device pixels per CSS pixel (2 on a HiDPI screen; default 1 or $BROWZER_SCALE)")
     ap.add_argument("--transfer", choices=("auto", "file", "inline"), default=os.environ.get("BROWZER_TRANSFER", "auto"),
@@ -48,15 +51,27 @@ def main(argv=None):
         ap.error("--scale must be positive")
     state = xdg("XDG_STATE_HOME", "~/.local/state")
     os.makedirs(state, exist_ok=True)
+    tunnel = None
     try:
-        app = App(normalize(args.url, args.search), binary=chromium.find(args.chromium),
-                  profile=None if args.temp_profile else (args.profile or os.path.join(xdg("XDG_DATA_HOME", "~/.local/share"), "profile")),
+        binary = chromium.find(args.chromium)
+        if args.ssh:
+            tunnel = Tunnel(args.ssh, os.environ.get("BROWZER_SSH", "ssh"))
+            print(f"browzer: connecting to {tunnel.label} ...", file=sys.stderr)
+            tunnel.start()
+        data = xdg("XDG_DATA_HOME", "~/.local/share")
+        profile = args.profile or os.path.join(data, f"profile-ssh-{tunnel.slug}" if tunnel else "profile")
+        # with --ssh a typed address is the far side's: a path that happens to exist here is not meant
+        app = App(normalize(args.url, args.search, bare_file=not tunnel), binary=binary,
+                  profile=None if args.temp_profile else profile,
                   log_path=os.path.join(state, "chromium.log"), scale=args.scale, transfer=args.transfer, stats=args.stats,
-                  search=args.search, control=not args.no_control)
+                  search=args.search, control=not args.no_control, tunnel=tunnel)
         status = app.run()
-    except (chromium.NotFound, Unsupported) as e:
+    except (chromium.NotFound, Unsupported, TunnelError) as e:
         print(f"browzer: {e}", file=sys.stderr)
         return 1
+    finally:
+        if tunnel:
+            tunnel.stop()
     if app.error:
         print(f"browzer: {app.error}", file=sys.stderr)
     return status

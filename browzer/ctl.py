@@ -92,7 +92,7 @@ def main(argv=None, out=sys.stdout, err=sys.stderr):
             print(json.dumps(answers), file=out)
         for a in answers:
             if a.get("ok") and not args.json:
-                print(f"browzer {a['pid']}", file=out)
+                print(f"browzer {a['pid']}" + (f"  via ssh {a['ssh']}" if a.get("ssh") else ""), file=out)
                 show_tabs(a["tabs"], out)
         if not answers and not args.json:
             print("no browzer is running", file=out)
