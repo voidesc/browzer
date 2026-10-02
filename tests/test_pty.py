@@ -51,6 +51,7 @@ SITE = None
 def setUpModule():
     global SITE
     SITE = tempfile.mkdtemp(prefix="browzer-test-site-")
+    os.mkdir(os.path.join(SITE, "run"), 0o700)
     with open(os.path.join(SITE, "first.html"), "w") as fh:
         fh.write(PAGE)
     with open(os.path.join(SITE, "second.html"), "w") as fh:
@@ -66,10 +67,12 @@ def click(at):
 
 
 class Session:
-    def __init__(self, *args, cols=80, rows=24, xpix=800, ypix=480):
+    def __init__(self, *args, cols=80, rows=24, xpix=800, ypix=480, env=None):
         self.master, self.slave = pty.openpty()
         self.winsize(cols, rows, xpix, ypix)
-        env = {k: v for k, v in os.environ.items() if k not in ("SSH_CONNECTION", "SSH_TTY", "TMUX")}
+        # its control socket goes to a directory of the tests' own, never the user's
+        env = {**{k: v for k, v in os.environ.items() if k not in ("SSH_CONNECTION", "SSH_TTY", "TMUX")},
+               "XDG_RUNTIME_DIR": os.path.join(SITE, "run"), **(env or {})}
         argv = [sys.executable, os.path.join(ROOT, "bin", "browzer"), "--temp-profile", *args, os.path.join(SITE, "first.html")]
         self.proc = subprocess.Popen(argv, stdin=self.slave, stdout=self.slave, stderr=subprocess.PIPE, env=env)
         self.out = b""

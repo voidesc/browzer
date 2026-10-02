@@ -13,6 +13,7 @@ import time
 from . import chromium, kitty, term
 from .bar import LineEdit, fit
 from .cdp import Closed, ProtocolError
+from .control import Control
 from .keys import ALT, CTRL, Focus, Key, Mouse, Parser, Paste, cdp_key_events, cdp_mods
 from .url import SEARCH, normalize
 
@@ -56,7 +57,7 @@ class Dialog:
 
 class App:
     def __init__(self, url, *, binary, profile, log_path, scale=1.0, transfer="auto", stats=False,
-                 search=SEARCH, in_fd=0, out_fd=1):
+                 search=SEARCH, control=True, in_fd=0, out_fd=1):
         self.first_url, self.binary, self.profile, self.log_path = url, binary, profile, log_path
         self.scale, self.stats, self.search, self.in_fd, self.out_fd = scale, stats, search, in_fd, out_fd
         if transfer == "auto":   # a file in shared memory only reaches a terminal on this machine
@@ -65,6 +66,8 @@ class App:
         self.transfer = transfer
         self.temp_profile = None
         self.proc = self.cdp = None
+        self.control = None                    # the socket other programs drive us through
+        self.use_control = control
         self.tabs, self.tab = [], None         # all of them, and the one on screen
         self.mode = None                       # None, a LineEdit (the address), or a Dialog
         self.size = None
@@ -99,12 +102,13 @@ class App:
 
     # --- the browser --------------------------------------------------------------
 
-    def send(self, method, params=None, then=None, tab=None, browser=False):
-        """A request to the active tab (or `tab`, or the browser itself); `then` gets its result."""
+    def send(self, method, params=None, then=None, tab=None, browser=False, fail=None):
+        """A request to the active tab (or `tab`, or the browser itself); `then` gets its
+        result, `fail` the browser's words when it refuses."""
         tab = tab or self.tab
         rid = self.cdp.send(method, params, None if browser or not tab else tab.session)
-        if then:
-            self.replies[rid] = then
+        if then or fail:
+            self.replies[rid] = (then, fail)
 
     def start(self):
         self.size = term.size(self.out_fd)
@@ -134,6 +138,8 @@ class App:
         self.send("Page.navigate", {"url": self.first_url})
 
     def stop(self):
+        if self.control:
+            self.control.close()
         if self.cdp:
             try:
                 self.cdp.send("Browser.close")
@@ -215,6 +221,8 @@ class App:
             tab = self.tab
             self.send("Runtime.evaluate", {"expression": "document.title", "returnByValue": True},
                       then=lambda r: self.on_title(tab, r))
+        elif name == "control":
+            self.control.expire()
         elif name == "pointer" and self.hover:
             x, y = self.hover
             self.send("Runtime.evaluate", {"expression": POINTER_AT % (x, y, x, y), "returnByValue": True},
@@ -235,6 +243,12 @@ class App:
         sel = selectors.DefaultSelector()
         for fd, what in ((self.in_fd, "tty"), (self.cdp.read_fd, "cdp"), (wake_r, "wake")):
             sel.register(fd, selectors.EVENT_READ, what)
+        if self.use_control:
+            try:
+                self.control = Control(self)
+                sel.register(self.control, selectors.EVENT_READ, "control")
+            except OSError as e:
+                self.notice = f"no control socket: {e}"
         try:
             with term.Screen(self.in_fd, self.out_fd):
                 self.draw_bar()
@@ -253,6 +267,8 @@ class App:
                             self.input(self.parser.feed(data))
                         elif key.data == "cdp":
                             self.handle(self.cdp.read())
+                        elif key.data == "control":
+                            self.control.accept()
                         else:
                             os.read(wake_r, 4096)
                             self.resize()
@@ -290,9 +306,11 @@ class App:
         frame = None
         for msg in messages:
             if "id" in msg:
-                then = self.replies.pop(msg["id"], None)
+                then, fail = self.replies.pop(msg["id"], (None, None))
                 if then and "result" in msg:
                     then(msg["result"])
+                elif fail and "error" in msg:
+                    fail(msg["error"].get("message", "the browser refused"))
                 continue
             method, p = msg.get("method"), msg.get("params", {})
             if method == "Target.targetCreated":
@@ -317,6 +335,8 @@ class App:
             elif method == "Page.frameStoppedLoading" and p.get("frameId") == tab.target:
                 tab.loading = False
                 self.after("title", 0)
+                if self.control:
+                    self.control.loaded(tab)
             elif method == "Page.frameNavigated" and "parentId" not in p["frame"]:
                 tab.url, tab.title = p["frame"].get("url", tab.url), ""
             elif method == "Page.navigatedWithinDocument" and p.get("frameId") == tab.target:

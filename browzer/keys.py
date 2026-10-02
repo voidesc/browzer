@@ -214,3 +214,29 @@ def cdp_key_events(key):
     down = {**base, "type": "keyDown", "text": text} if text else {**base, "type": "rawKeyDown"}
     up = {k: v for k, v in base.items() if k != "commands"}
     return [down, {**up, "type": "keyUp"}]
+
+
+_NAMES = {"enter": "Enter", "return": "Enter", "tab": "Tab", "escape": "Escape", "esc": "Escape",
+          "backspace": "Backspace", "delete": "Delete", "insert": "Insert", "space": " ", "up": "ArrowUp",
+          "down": "ArrowDown", "left": "ArrowLeft", "right": "ArrowRight", "arrowup": "ArrowUp",
+          "arrowdown": "ArrowDown", "arrowleft": "ArrowLeft", "arrowright": "ArrowRight", "pageup": "PageUp",
+          "pagedown": "PageDown", "home": "Home", "end": "End", **{f"f{n}": f"F{n}" for n in range(1, 13)}}
+_MOD_NAMES = {"ctrl": CTRL, "control": CTRL, "alt": ALT, "shift": SHIFT, "super": SUPER, "meta": SUPER, "cmd": SUPER}
+
+
+def parse_chord(text):
+    """A key as a person writes it (`Enter`, `ctrl+a`, `shift+Tab`, `x`) as a Key."""
+    parts = text.split("+")
+    if text.endswith("+"):   # the plus key itself: `+`, `ctrl++`
+        parts = [p for p in text[:-1].split("+") if p] + ["+"]
+    *mods, name = parts
+    bits = 0
+    for mod in mods:
+        if mod.lower() not in _MOD_NAMES:
+            raise ValueError(f"'{mod}' is not a modifier (ctrl, alt, shift, super)")
+        bits |= _MOD_NAMES[mod.lower()]
+    if name.lower() in _NAMES:
+        return Key(_NAMES[name.lower()], bits)
+    if len(name) != 1:
+        raise ValueError(f"'{name}' is not a key (one character, or a name like Enter, Tab, ArrowDown, F5)")
+    return Key(name, bits)
