@@ -34,6 +34,11 @@ PAGE = f"""<title>browzer test</title><body style="margin:0;height:5000px">
 <script>addEventListener('scroll',()=>{{document.title='scrolled '+(scrollY>0)}})</script>"""
 # where those are on the terminal
 BUTTON, INPUT, LINK, ASK, PROMPT = (100, 55), (100, 135), (100, 195), (100, 255), (100, 315)
+# the same places, for what the browser itself would open a window for
+DESK = f"""<title>browzer test</title><body style="margin:0">
+<button style="{BOX};top:20px" onpointerdown="document.title='pressure '+event.pressure">press</button>
+<input type=file style="{BOX};top:100px">
+<button style="{BOX};top:160px" onclick="print()">print</button>"""
 
 CTRL_Q, CTRL_L, CTRL_T, CTRL_W = b"\x1b[113;5u", b"\x1b[108;5u", b"\x1b[116;5u", b"\x1b[119;5u"
 CTRL_A, CTRL_C, CTRL_PGUP, ALT_LEFT = b"\x1b[97;5u", b"\x1b[99;5u", b"\x1b[5;5~", b"\x1b[1;3D"
@@ -56,6 +61,8 @@ def setUpModule():
         fh.write(PAGE)
     with open(os.path.join(SITE, "second.html"), "w") as fh:
         fh.write("<title>second page</title>second")
+    with open(os.path.join(SITE, "desk.html"), "w") as fh:
+        fh.write(DESK)
 
 
 def tearDownModule():
@@ -70,8 +77,10 @@ class Session:
     def __init__(self, *args, cols=80, rows=24, xpix=800, ypix=480, env=None, url=None):
         self.master, self.slave = pty.openpty()
         self.winsize(cols, rows, xpix, ypix)
-        # its control socket goes to a directory of the tests' own, never the user's
-        env = {**{k: v for k, v in os.environ.items() if k not in ("SSH_CONNECTION", "SSH_TTY", "TMUX")},
+        # its control socket goes to a directory of the tests' own, never the user's; and with no
+        # display to find, nothing of the browser's can open on the desktop the tests run on
+        gone = ("SSH_CONNECTION", "SSH_TTY", "TMUX", "DISPLAY", "WAYLAND_DISPLAY")
+        env = {**{k: v for k, v in os.environ.items() if k not in gone},
                "XDG_RUNTIME_DIR": os.path.join(SITE, "run"), **(env or {})}
         argv = [sys.executable, os.path.join(ROOT, "bin", "browzer"), "--temp-profile", *args, url or os.path.join(SITE, "first.html")]
         self.proc = subprocess.Popen(argv, stdin=self.slave, stdout=self.slave, stderr=subprocess.PIPE, env=env)
@@ -184,6 +193,14 @@ class BrowserTest(unittest.TestCase):
         s.then(CTRL_A + CTRL_C, b"\x1b]52;c;" + base64.b64encode(b"hello") + b"\x1b\\", "the selection on the clipboard")
         s.then(b"\x1b[<35;%d;%dM" % LINK, b"\x1b]22;pointer\x1b\\", "the hand over a link")
         s.then(b"\x1b[<35;600;400M", b"\x1b]22;default\x1b\\", "the arrow over nothing")
+
+    def test_what_the_browser_would_open_a_window_for(self):
+        s = self.open(url=os.path.join(SITE, "desk.html"))
+        s.then(click(BUTTON), b"pressure 0.5", "a press with a mouse's pressure")
+        s.then(click(INPUT), b"does not upload files yet", "the file chooser answered in the bar")
+        s.then(click(LINK), b"chrome://print", "the print preview as a second tab")
+        self.assertTrue(BAR + b" 2/2 " in s.out)
+        s.then(CTRL_W, BAR + b"   pressure 0.5", "ctrl+w cancelling the print, back on the page")
 
     def test_file_transfer_spools_and_sweeps(self):
         s = Session("--transfer", "file")

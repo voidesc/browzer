@@ -1,5 +1,6 @@
 """`browzer ctl` against a real browzer running in a pseudo-terminal."""
 import io
+import json
 import os
 import shutil
 import socket
@@ -141,6 +142,18 @@ class ControlTest(unittest.TestCase):
         self.assertIn("not a ref", self.ctl("click", "button", status=1))
         self.assertIn("snapshot", self.ctl("click", "e99999999", status=1))
         self.assertIn("not a key", self.ctl("press", "Entre", status=1))
+
+    def test_a_page_sees_a_regular_browser(self):
+        seen = json.loads(self.ctl("eval", """({agent: navigator.userAgent, robot: navigator.webdriver,
+            mouse: matchMedia('(hover: hover) and (pointer: fine)').matches,
+            screen: [screen.width, screen.height], hints: navigator.userAgentData.brands.length,
+            webgl: !!document.createElement('canvas').getContext('webgl')})"""))
+        self.assertNotIn("Headless", seen["agent"])
+        self.assertIs(seen["robot"], False)
+        self.assertTrue(seen["mouse"], "the terminal's mouse is a mouse to the page")
+        self.assertGreaterEqual(seen["screen"], [800, 460], "the page fits on its screen")
+        self.assertTrue(seen["hints"], "the browser still says which browser it is")
+        self.assertTrue(seen["webgl"], "with a GPU or without")
 
     def test_screenshot(self):
         path = os.path.join(self.runtime, "shot.png")

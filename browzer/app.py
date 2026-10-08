@@ -22,6 +22,7 @@ WHEEL_STEP = 100          # CSS pixels a wheel notch scrolls
 DOUBLE_CLICK = (0.4, 6)   # seconds, device pixels: a second press inside both is a double click
 BUTTONS = ("left", "middle", "right")
 BUTTON_BITS = (1, 4, 2)   # the protocol's `buttons` mask, by our button number
+HELD_FORCE = 0.5          # the pressure a mouse reports while a button is down
 HINT = " ^L address · ^T tab · ^Q quit "
 
 # what the pointer should look like over a point of the page: the element's own cursor, or
@@ -35,6 +36,7 @@ SELECTION = """(() => { const a = document.activeElement;
 if (a && typeof a.selectionStart === 'number' && a.selectionEnd > a.selectionStart)
   return a.type === 'password' ? '' : a.value.substring(a.selectionStart, a.selectionEnd);
 return String(getSelection()) })()"""
+PRINT_PREVIEW = "chrome://print"   # the browser's own page for a page that asked to be printed
 
 
 class Unsupported(Exception):
@@ -45,6 +47,7 @@ class Tab:
     def __init__(self, target, session):
         self.target, self.session = target, session
         self.url, self.title, self.loading = "", "", False
+        self.opener = None   # the tab to go back to when this one closes
 
 
 class Dialog:
@@ -163,6 +166,8 @@ class App:
         self.tabs.append(tab)
         self.send("Page.enable", tab=tab)
         self.send("Emulation.setFocusEmulationEnabled", {"enabled": True}, tab=tab)
+        # the browser's own chooser would be a window on the desktop, or nothing at all over ssh
+        self.send("Page.setInterceptFileChooserDialog", {"enabled": True}, tab=tab)
         return tab
 
     def show(self, tab):
@@ -191,6 +196,10 @@ class App:
         self.send("Target.createTarget", {"url": "about:blank"}, then=made, browser=True)
 
     def close_tab(self, tab):
+        if tab.url.startswith(PRINT_PREVIEW):
+            # a dialog of the browser's, closed the way its Cancel does; the tab goes when it is gone
+            self.send("Runtime.evaluate", {"expression": "chrome.send('dialogClose')"}, tab=tab)
+            return
         self.send("Target.closeTarget", {"targetId": tab.target}, browser=True)
         self.drop(tab)
 
@@ -205,7 +214,7 @@ class App:
         if not self.tabs:
             self.done = True
         elif self.tab is tab:
-            self.show(self.tabs[min(at, len(self.tabs) - 1)])
+            self.show(tab.opener if tab.opener in self.tabs else self.tabs[min(at, len(self.tabs) - 1)])
 
     def step_tab(self, step):
         if len(self.tabs) > 1:
@@ -322,11 +331,13 @@ class App:
                 continue
             method, p = msg.get("method"), msg.get("params", {})
             if method == "Target.targetCreated":
-                self.on_created(p["targetInfo"])
+                self.on_target(p["targetInfo"])
             elif method == "Target.targetInfoChanged":
                 tab = self.by("target", p["targetInfo"].get("targetId"))
                 if tab:
                     tab.url = p["targetInfo"].get("url", tab.url)
+                elif p["targetInfo"].get("url", "").startswith(PRINT_PREVIEW):
+                    self.on_target(p["targetInfo"])   # it has its address only now
             elif method == "Target.targetDestroyed":
                 self.drop(self.by("target", p.get("targetId")))
             elif method == "Browser.downloadWillBegin":
@@ -356,6 +367,8 @@ class App:
             elif method == "Page.javascriptDialogClosed":
                 if isinstance(self.mode, Dialog) and self.mode.tab is tab:
                     self.mode = None
+            elif method == "Page.fileChooserOpened":
+                self.notice = "browzer does not upload files yet"
             elif method == "Inspector.targetCrashed":
                 self.notice = "the page crashed; ctrl+r reloads it"
         if frame is not None:
@@ -365,13 +378,19 @@ class App:
     def by(self, what, value):
         return next((t for t in self.tabs if getattr(t, what) == value), None) if value else None
 
-    def on_created(self, info):
-        """A page that one of our tabs opened (a link to a new window, window.open) is a new tab."""
-        if info.get("type") == "page" and self.by("target", info.get("openerId")) and not self.by("target", info["targetId"]):
+    def on_target(self, info):
+        """A page that one of our tabs opened (a link to a new window, window.open) is a new tab,
+        and so is the print preview, which the browser would lay over the page that prints."""
+        opener = self.by("target", info.get("openerId"))
+        if not opener and info.get("url", "").startswith(PRINT_PREVIEW):
+            opener = self.tab
+        if info.get("type") == "page" and opener and not self.by("target", info["targetId"]):
             try:
-                self.show(self.adopt(info["targetId"]))
+                tab = self.adopt(info["targetId"])
             except (ProtocolError, TimeoutError):
-                pass   # gone again before we could attach
+                return   # gone again before we could attach
+            tab.url, tab.opener = info.get("url", ""), opener
+            self.show(tab)
 
     def on_title(self, tab, result):
         """The browser announces no title changes here, so the page is asked: when it has
@@ -586,6 +605,7 @@ class App:
             self.flush_pointer()
             bit = BUTTON_BITS[ev.button]
             if ev.kind == "press":
+                self.notice = ""
                 if isinstance(self.mode, LineEdit):
                     self.mode = None   # a click on the page leaves the address as it was
                 when, px, py, button, count = self.last_press
@@ -601,14 +621,15 @@ class App:
                 self.held &= ~bit
             self.send("Input.dispatchMouseEvent", {
                 "type": "mousePressed" if ev.kind == "press" else "mouseReleased", "x": x, "y": max(0.0, y),
-                "button": BUTTONS[ev.button], "buttons": self.held, "clickCount": count, "modifiers": cdp_mods(ev.mods)})
+                "button": BUTTONS[ev.button], "buttons": self.held, "clickCount": count, "modifiers": cdp_mods(ev.mods),
+                "force": HELD_FORCE if ev.kind == "press" else 0})
 
     def flush_pointer(self):
         if self.move:
             x, y, mods = self.move
             self.move = None
-            self.send("Input.dispatchMouseEvent",
-                      {"type": "mouseMoved", "x": x, "y": y, "buttons": self.held, "modifiers": cdp_mods(mods)})
+            self.send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y, "buttons": self.held,
+                                                   "modifiers": cdp_mods(mods), "force": HELD_FORCE if self.held else 0})
             self.hover = (x, y)
             self.after("pointer", 0.08)
         if self.wheel:
