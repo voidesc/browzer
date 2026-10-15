@@ -8,7 +8,8 @@ import unittest
 
 from browzer.tunnel import Tunnel, TunnelError
 from tests import test_pty
-from tests.test_pty import BAR, HAVE_BROWSER, Session, frame_sizes
+from browzer.app import BAR as BAR_STYLE, HOT, TEXT
+from tests.test_pty import HAVE_BROWSER, Session, frame_sizes
 
 FAKE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake_ssh.py")
 
@@ -70,12 +71,12 @@ class SshTest(unittest.TestCase):
     def test_localhost_is_the_far_sides_and_names_cross_unresolved(self):
         s = Session("--transfer", "inline", "--ssh", "dev@testbox", url="http://localhost:4321/", env=self.env)
         self.addCleanup(s.close)
-        s.until(BAR + b" [dev@testbox]   through the tunnel", "the far side's page, the host in the bar")
+        s.until(BAR_STYLE + HOT + b" [dev@testbox]" + TEXT + b"   through the tunnel", "the far side's page, the host in the bar")
         self.assertIn("request name localhost 4321", self.logged())
         self.assertIn("-N -D 127.0.0.1:", self.logged()[0])
         self.assertTrue(self.logged()[0].endswith("dev@testbox"))
 
-        s.then(b"\x1b[108;5u" + b"http://some.host.invalid/x\r", BAR + b" [dev@testbox]   through the tunnel", "another host")
+        s.then(b"\x1b[108;5u" + b"http://some.host.invalid/x\r", BAR_STYLE + HOT + b" [dev@testbox]" + TEXT + b"   through the tunnel", "another host")
         self.assertIn("request name some.host.invalid 80", self.logged(), "the name went to the far side to resolve")
 
     def test_a_dead_tunnel_comes_back(self):

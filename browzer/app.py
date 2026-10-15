@@ -22,6 +22,14 @@ WHEEL_STEP = 100          # CSS pixels a wheel notch scrolls
 DOUBLE_CLICK = (0.4, 6)   # seconds, device pixels: a second press inside both is a double click
 BUTTONS = ("left", "middle", "right")
 BUTTON_BITS = (1, 4, 2)   # the protocol's `buttons` mask, by our button number
+# The bar's colours, kanagawa-dragon like the rest of the desk: a dark strip (#181616) with quiet
+# text (#a6a69c), the tab count in the burnt orange (#b8642a), the url and the hint dim (#625e5a).
+# Reverse video made a light strip on a dark terminal.
+BAR = b"\x1b[0;48;2;24;22;22;38;2;166;166;156m"
+TEXT = b"\x1b[38;2;166;166;156m"
+DIM = b"\x1b[38;2;98;94;90m"
+HOT = b"\x1b[38;2;184;100;42m"
+RESET = b"\x1b[0m"
 HELD_FORCE = 0.5          # the pressure a mouse reports while a button is down
 HINT = " ^L address · ^T tab · ^Q quit "
 
@@ -454,30 +462,35 @@ class App:
         dialog's question."""
         cols = self.size.cols
         if isinstance(self.mode, LineEdit):
-            return b"\x1b[0m" + self.editing(" address › ", self.mode, cols)
+            return BAR + self.editing(" address › ", self.mode, cols)
         if isinstance(self.mode, Dialog):
             d = self.mode
             if d.edit:
                 lead = fit(f" {d.message} › ", min(len(d.message) + 4, cols * 2 // 3))
-                return b"\x1b[0;1m" + self.editing(lead, d.edit, cols)
+                return BAR + b"\x1b[1m" + self.editing(lead, d.edit, cols)
             keys = " [enter] " if d.kind == "alert" else " [y / n] "
-            return b"\x1b[0;1m" + (fit(f" {d.kind}: {d.message}", cols - len(keys)) + keys)[:cols].encode() + b"\x1b[0m"
+            return BAR + b"\x1b[1m" + (fit(f" {d.kind}: {d.message}", cols - len(keys)) + keys)[:cols].encode() + RESET
         tab = self.tab
         count = f" {self.tabs.index(tab) + 1}/{len(self.tabs)}" if len(self.tabs) > 1 else ""
         if self.tunnel:
             count = f" [{self.tunnel.label}]{count}"
-        left = f"{count} {'◌' if tab.loading else ' '} {tab.title or tab.url}"
-        if tab.title and tab.url:
-            left += f"  ·  {tab.url}"
+        pieces = [(count, HOT), (f" {'◌' if tab.loading else ' '} {tab.title or tab.url}", TEXT),
+                  (f"  ·  {tab.url}" if tab.title and tab.url else "", DIM)]
         if self.notice:
-            left = f" {self.notice}"
+            pieces = [(f" {self.notice}", TEXT)]
         right = HINT
         if self.stats:
             now = time.monotonic()
             fps = sum(1 for t in self.frames if now - t < 1.0)
             right = f" {fps:2d} fps · {self.frame_bytes // 1024} KB · {self.draw_ms:.1f} ms · {self.transfer} ·{right}"
         right = right if len(right) < cols else ""
-        return b"\x1b[0;7m" + (fit(left, cols - len(right)) + right).encode() + b"\x1b[0m"
+        room, row, used = cols - len(right), BAR, 0
+        for text, colour in pieces:    # the left part, piece by piece in its colour, cut at the room
+            text = text[:max(0, room - used)]
+            if text:
+                row += colour + text.encode()
+                used += len(text)
+        return row + TEXT + b" " * (room - used) + DIM + right.encode() + RESET
 
     @staticmethod
     def editing(lead, edit, cols):
@@ -489,7 +502,7 @@ class App:
             body = b"\x1b[7m" + shown.rstrip().encode() + b"\x1b[27m"
         else:
             body = shown[:at].encode() + b"\x1b[7m" + shown[at].encode() + b"\x1b[27m" + shown[at + 1:].encode()
-        return lead.encode() + body + b"\x1b[0m\x1b[K"
+        return lead.encode() + body + b"\x1b[K" + RESET   # the erase paints the bar's background
 
     def draw_bar(self):
         if not self.tab:

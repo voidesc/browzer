@@ -42,7 +42,9 @@ DESK = f"""<title>browzer test</title><body style="margin:0">
 
 CTRL_Q, CTRL_L, CTRL_T, CTRL_W = b"\x1b[113;5u", b"\x1b[108;5u", b"\x1b[116;5u", b"\x1b[119;5u"
 CTRL_A, CTRL_C, CTRL_PGUP, ALT_LEFT = b"\x1b[97;5u", b"\x1b[99;5u", b"\x1b[5;5~", b"\x1b[1;3D"
-BAR = b"\x1b[0;7m"   # how the page's line in the bar starts
+from browzer.app import BAR as BAR_STYLE, HOT, TEXT
+
+BAR = BAR_STYLE + TEXT   # how the page's line in the bar starts with one tab (the count is in HOT)
 
 try:
     chromium.find()
@@ -166,12 +168,12 @@ class BrowserTest(unittest.TestCase):
 
     def test_tabs(self):
         s = self.open()
-        s.then(click(LINK), BAR + b" 2/2   second page", "a new-window link opening as a second tab")
-        s.then(CTRL_PGUP, BAR + b" 1/2   browzer test", "ctrl+pageup showing the first tab")
-        s.then(b"\x1b[50;3u", BAR + b" 2/2   second page", "alt+2 showing the second")
+        s.then(click(LINK), BAR_STYLE + HOT + b" 2/2" + TEXT + b"   second page", "a new-window link opening as a second tab")
+        s.then(CTRL_PGUP, BAR_STYLE + HOT + b" 1/2" + TEXT + b"   browzer test", "ctrl+pageup showing the first tab")
+        s.then(b"\x1b[50;3u", BAR_STYLE + HOT + b" 2/2" + TEXT + b"   second page", "alt+2 showing the second")
         s.then(CTRL_W, BAR + b"   browzer test", "ctrl+w closing it")
         s.then(CTRL_T, b" address \xe2\x80\xba ", "ctrl+t asking where to go")
-        s.then(os.path.join(SITE, "second.html").encode() + b"\r", BAR + b" 2/2   second page", "the new tab loading")
+        s.then(os.path.join(SITE, "second.html").encode() + b"\r", BAR_STYLE + HOT + b" 2/2" + TEXT + b"   second page", "the new tab loading")
         s.type(CTRL_W + CTRL_W)
         self.assertEqual(s.proc.wait(10), 0, "closing the last tab ends browzer")
 
@@ -199,7 +201,7 @@ class BrowserTest(unittest.TestCase):
         s.then(click(BUTTON), b"pressure 0.5", "a press with a mouse's pressure")
         s.then(click(INPUT), b"does not upload files yet", "the file chooser answered in the bar")
         s.then(click(LINK), b"chrome://print", "the print preview as a second tab")
-        self.assertTrue(BAR + b" 2/2 " in s.out)
+        self.assertTrue(BAR_STYLE + HOT + b" 2/2" + TEXT + b" " in s.out)
         s.then(CTRL_W, BAR + b"   pressure 0.5", "ctrl+w cancelling the print, back on the page")
 
     def test_file_transfer_spools_and_sweeps(self):
